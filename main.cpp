@@ -5,7 +5,6 @@
 #include "TransportTCP.h"
 #include "RiskManager.h"
 #include "Storage.h"
-#include "Test.h"
 
 #include <fstream>
 #include <experimental/filesystem>
