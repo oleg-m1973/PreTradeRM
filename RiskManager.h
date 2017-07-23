@@ -216,8 +216,30 @@ class CRiskManager
 public:
 	struct CInvestor
 	{
-		std::mutex m_mx;
-		TDateTime m_moratorium{TDateTime::min()};
+		void SetMoratorium(const SOrder &order, const CCheckOrderError &err)
+		{
+			SYS_LOCK_WRITE(m_mx);
+			const auto tm = order.m_time + err.m_moratorium;
+
+			auto it = m_moratorium.find(order.m_symbol);
+			if (it == m_moratorium.end())
+				m_moratorium.emplace(order.m_symbol, tm);
+			else
+				it->second = tm;
+		}
+
+
+		bool IsMoratorium(const SOrder &order) const
+		{
+			SYS_LOCK_READ(m_mx);
+			auto it = m_moratorium.find(order.m_symbol);
+			return it != m_moratorium.end() && order.m_time < it->second;
+		}
+
+		mutable std::shared_mutex m_mx;
+		std::unordered_map<TSymbol, TDateTime> m_moratorium;
+
+		//TDateTime m_moratorium{TDateTime::min()};
 	};
 
 	CRiskManager(const TS::CConfigFile &cfg);
@@ -276,7 +298,7 @@ protected:
 inline
 void SendReject(CTransport &trans, const SOrder &order, CMessage::TAttrs attrs, std::string reason)
 {
-	//Log.Debug(order.m_time, order.m_order_id, order.m_symbol, order.m_user_id, "REJECT", reason);
+	Log.Debug("REJECT", order.m_time, order.m_order_id, order.m_symbol, order.m_user_id, reason);
 	attrs.emplace_back("reject"s, std::move(reason));
 	trans.SendMessage(attrs);
 }
@@ -288,11 +310,11 @@ void CRiskManager::ProcessMessage<SOrder>(CTransport &trans, const CMessage &msg
 
 
 	auto &investor = GetInvestor(order.m_user_id);
-//	if (investor.m_moratorium > std::chrono::system_clock::now())
-//	{
-//		SendReject(trans, order, msg.m_attrs, "Moratorium");
-//		return;
-//	}
+	if (investor.IsMoratorium(order))
+	{
+		SendReject(trans, order, msg.m_attrs, "Moratorium");
+		return;
+	}
 
 	try
 	{
@@ -304,7 +326,7 @@ void CRiskManager::ProcessMessage<SOrder>(CTransport &trans, const CMessage &msg
 	}
 	catch(const CCheckOrderError &err)
 	{
-		investor.m_moratorium = std::chrono::system_clock::now() + err.m_moratorium;
+		investor.SetMoratorium(order, err);
 		SendReject(trans, order, msg.m_attrs, err.what());
 	}
 }
